@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101419">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="实时读取手机 X、Y、Z 三轴姿态角度，轻触任意一轴即可全屏放大。">
+  <title>三轴角度</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #101419; color: #f4f6f8; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; overflow: hidden; }
+    button { font: inherit; cursor: pointer; touch-action: manipulation; }
+    button:focus-visible { outline: 3px solid #fff; outline-offset: -5px; }
+    [hidden] { display: none !important; }
+    .app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+    .toolbar { flex: 0 0 auto; min-height: 66px; padding: calc(12px + env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 12px max(18px, env(safe-area-inset-left)); display: flex; align-items: center; gap: 14px; }
+    h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .04em; white-space: nowrap; }
+    .logo { display: inline-flex; align-items: flex-end; height: 15px; gap: 3px; margin-right: 9px; }
+    .logo i { width: 3px; border-radius: 1px; background: #92c7fb; height: 10px; }
+    .logo i:nth-child(2) { background: #9ee1c7; height: 15px; }
+    .logo i:nth-child(3) { background: #f2bb98; height: 7px; }
+    .connection { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; font-size: 11px; white-space: nowrap; color: #89949f; }
+    .connection::before { content: ""; width: 5px; height: 5px; background: #7b8794; border-radius: 50%; }
+    .connection[data-state="live"]::before { background: #9ee1c7; box-shadow: 0 0 8px #9ee1c740; }
+    .connection[data-state="error"]::before { background: #f2bb98; }
+    .start { background: #e9eef3; border: 0; color: #111820; font-size: 12px; font-weight: 650; border-radius: 7px; padding: 10px 12px; white-space: nowrap; }
+    .start:disabled { opacity: .55; cursor: wait; }
+    .axes { flex: 1; min-height: 0; display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 1px; background: #2b333c; }
+    .axis { --ink: #92c7fb; --surface: #151e27; position: relative; min-width: 0; min-height: 0; width: 100%; border: 0; padding: 16px 24px; color: var(--ink); background: var(--surface); display: flex; flex-direction: column; justify-content: space-between; text-align: left; overflow: hidden; }
+    .axis-y { --ink: #9ee1c7; --surface: #16231f; }
+    .axis-z { --ink: #f2bb98; --surface: #28201c; }
+    .axis-top, .axis-bottom { display: flex; justify-content: space-between; align-items: center; width: 100%; flex: 0 0 auto; }
+    .axis-top { font-size: 13px; font-weight: 650; letter-spacing: .06em; }
+    .axis-symbol { font-size: 18px; font-weight: 600; margin-right: 5px; }
+    .expand-icon { width: 16px; height: 16px; opacity: .55; }
+    .reading { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; white-space: nowrap; font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; letter-spacing: -.055em; line-height: 1; }
+    .value { font-size: clamp(48px, min(22vw, 12dvh), 148px); font-weight: 400; }
+    .unit { font-size: clamp(23px, 7vw, 40px); align-self: center; transform: translateY(-.38em); margin-left: 6px; letter-spacing: 0; opacity: .75; }
+    .axis-bottom { color: var(--ink); opacity: .57; font-size: 11px; line-height: 1.4; letter-spacing: .03em; }
+    .axis-bottom .range { font-size: 10px; font-variant-numeric: tabular-nums; }
+    .hint { flex: 0 0 auto; margin: 0; min-height: 34px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); font-size: 10px; letter-spacing: .07em; text-align: center; color: #7e8b98; }
+    .message { position: fixed; z-index: 20; bottom: calc(45px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: min(90vw, 440px); padding: 15px 17px; border: 1px solid #53606d; border-radius: 10px; color: #e9eef3; background: #172029f5; box-shadow: 0 8px 30px #0005; font-size: 13px; line-height: 1.65; }
+    .message-close { float: right; border: 0; color: #c3cdd6; background: transparent; margin: -4px -5px 0 10px; padding: 4px 7px; font-size: 18px; }
+    .back { display: none; position: fixed; top: calc(15px + env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left)); z-index: 12; border: 1px solid #ffffff24; border-radius: 8px; background: #10141966; color: #e7edf2; padding: 10px 13px; font-size: 12px; }
+    .app.is-focused .axis:not(.is-selected), .app.is-focused .toolbar, .app.is-focused .hint { display: none; }
+    .app.is-focused .axes { display: block; }
+    .app.is-focused .axis.is-selected { position: fixed; inset: 0; z-index: 10; width: 100%; height: 100%; padding: calc(76px + env(safe-area-inset-top)) max(28px, env(safe-area-inset-right)) calc(25px + env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left)); }
+    .app.is-focused .value { font-size: clamp(54px, min(25vw, 38dvh), 340px); }
+    .app.is-focused .unit { font-size: clamp(30px, 10vw, 95px); }
+    .app.is-focused .axis-top { font-size: 17px; }
+    .app.is-focused .axis-symbol { font-size: 26px; }
+    .app.is-focused .axis-bottom { font-size: 13px; }
+    .app.is-focused .axis-bottom .range { font-size: 12px; }
+    .app.is-focused .back { display: block; }
+    .app.is-focused .expand-icon { transform: rotate(180deg); }
+    .app.is-focused .message { bottom: calc(55px + env(safe-area-inset-bottom)); }
+    @media (orientation: landscape) and (min-width: 560px) {
+      .axes { grid-template-rows: minmax(0, 1fr); grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .axis { padding: 20px; }
+      .value { font-size: clamp(42px, min(8.2vw, 29dvh), 160px); }
+      .unit { font-size: 30px; }
+      .app.is-focused .value { font-size: clamp(80px, min(28vw, 49dvh), 360px); }
+    }
+    @media (max-width: 350px) { .toolbar { gap: 8px; padding-left: 12px; padding-right: 12px; } h1 { font-size: 15px; } .connection { font-size: 10px; } .logo { display: none; } .start { padding: 9px; font-size: 11px; } .axis { padding-left: 18px; padding-right: 18px; } }
+    @media (max-height: 530px) and (orientation: portrait) { .toolbar { min-height: 52px; padding-top: 7px; padding-bottom: 7px; } .axis { padding-top: 8px; padding-bottom: 8px; } .axis-bottom { font-size: 10px; } .hint { min-height: 28px; padding-top: 7px; padding-bottom: 7px; } .value { font-size: min(20vw, 10dvh); } }
+  </style>
+</head>
+<body>
+  <main class="app" id="app">
+    <header class="toolbar">
+      <h1><span class="logo" aria-hidden="true"><i></i><i></i><i></i></span>三轴角度</h1>
+      <span class="connection" id="connection" data-state="idle" role="status">未连接</span>
+      <button class="start" id="start" type="button">启用传感器</button>
+    </header>
+    <section class="axes" aria-label="手机三轴姿态角度">
+      <button class="axis axis-x" id="axis-x" data-axis="x" type="button" aria-expanded="false">
+        <span class="axis-top"><span><span class="axis-symbol">X</span> 轴</span><svg class="expand-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></span>
+        <span class="reading"><span class="value" id="value-x">—.—</span><span class="unit">°</span></span>
+        <span class="axis-bottom"><span>前后倾斜 · β</span><span class="range">−180° ~ 180°</span></span>
+      </button>
+      <button class="axis axis-y" id="axis-y" data-axis="y" type="button" aria-expanded="false">
+        <span class="axis-top"><span><span class="axis-symbol">Y</span> 轴</span><svg class="expand-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></span>
+        <span class="reading"><span class="value" id="value-y">—.—</span><span class="unit">°</span></span>
+        <span class="axis-bottom"><span>左右倾斜 · γ</span><span class="range">−90° ~ 90°</span></span>
+      </button>
+      <button class="axis axis-z" id="axis-z" data-axis="z" type="button" aria-expanded="false">
+        <span class="axis-top"><span><span class="axis-symbol">Z</span> 轴</span><svg class="expand-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></span>
+        <span class="reading"><span class="value" id="value-z">—.—</span><span class="unit">°</span></span>
+        <span class="axis-bottom"><span>平面转向 · α</span><span class="range">0° ~ 360°</span></span>
+      </button>
+    </section>
+    <p class="hint" id="hint">启用后读取实时角度 · 轻触任意轴放大</p>
+    <button class="back" id="back" type="button">← 返回三轴</button>
+    <aside class="message" id="message" role="alert" hidden><button class="message-close" id="message-close" aria-label="关闭提示" type="button">×</button><span id="message-text"></span></aside>
+    <noscript>请启用 JavaScript 后读取手机传感器。</noscript>
+  </main>
+  <script>
+    (() => {
+      'use strict';
+      // 使用浏览器融合后的姿态角（单位：度），不是陀螺仪原始角速度。
+      // 手机自然方向坐标：X = beta，Y = gamma，Z = alpha。
+      // 横竖屏切换不重新映射物理轴；Z 的参考方向由浏览器决定，不等同于罗盘航向。
+      const app = document.getElementById('app');
+      const start = document.getElementById('start');
+      const connection = document.getElementById('connection');
+      const hint = document.getElementById('hint');
+      const message = document.getElementById('message');
+      const messageText = document.getElementById('message-text');
+      const back = document.getElementById('back');
+      const tiles = Array.from(document.querySelectorAll('.axis'));
+      const values = Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, document.getElementById('value-' + axis)]));
+      let listening = false;
+      let started = false;
+      let hasSample = false;
+      let lastSampleAt = 0;
+      let sessionStartedAt = 0;
+      let selected = null;
+      let fullscreenWasEntered = false;
+      let session = 0;
+      let renderPending = false;
+      let latest = { x: null, y: null, z: null };
+
+      function setStatus(text, state) {
+        if (connection.textContent !== text) connection.textContent = text;
+        connection.dataset.state = state;
+      }
+      function showMessage(text) { messageText.textContent = text; message.hidden = false; }
+      function clearMessage() { message.hidden = true; }
+      function formatAngle(value, axis) {
+        if (!Number.isFinite(value)) return '—.—';
+        // 保留一位小数；避免 -0.0 和 Z 轴舍入成 360.0。
+        let rounded = Math.round(value * 10) / 10;
+        if (axis === 'z') rounded = ((rounded % 360) + 360) % 360;
+        return (Object.is(rounded, -0) ? 0 : rounded).toFixed(1);
+      }
+      function render() {
+        renderPending = false;
+        for (const axis of ['x', 'y', 'z']) {
+          const text = formatAngle(latest[axis], axis);
+          if (values[axis].textContent !== text) values[axis].textContent = text;
+        }
+      }
+      function onOrientation(event) {
+        const next = { x: event.beta, y: event.gamma, z: event.alpha };
+        if (!Object.values(next).some(Number.isFinite)) return;
+        latest = next;
+        hasSample = true;
+        lastSampleAt = performance.now();
+        const complete = Object.values(next).every(Number.isFinite);
+        setStatus(complete ? '实时读取' : '部分数据', 'live');
+        hint.textContent = complete ? '轻触任意轴放大 · 再次轻触返回' : '未提供的轴显示 —.— · 轻触任意轴放大';
+        // 收到真实数据后自动收起“等待数据”提示，不产生任何模拟读数。
+        clearMessage();
+        if (!renderPending) { renderPending = true; requestAnimationFrame(render); }
+      }
+
+      async function enableSensor() {
+        if (start.disabled) return;
+        clearMessage();
+        if (!window.isSecureContext) {
+          setStatus('需要 HTTPS', 'error');
+          showMessage('请通过 HTTPS 链接打开此页面。手机访问电脑的普通 HTTP 局域网地址时，浏览器通常会禁止传感器。');
+          return;
+        }
+        if (typeof window.DeviceOrientationEvent === 'undefined') {
+          setStatus('不支持', 'error');
+          showMessage('当前浏览器没有提供姿态传感器接口。请用带传感器的手机，在 Safari 或 Chrome 中打开。');
+          return;
+        }
+        const thisSession = ++session;
+        start.disabled = true;
+        start.textContent = '连接中…';
+        setStatus('等待授权', 'idle');
+        if (listening) {
+          window.removeEventListener('deviceorientation', onOrientation);
+          listening = false;
+        }
+        started = false;
+        hasSample = false;
+        latest = { x: null, y: null, z: null };
+        render();
+        try {
+          // iOS 必须在用户点击处理函数内立即调用，不能自动申请或延时申请。
+          if (typeof window.DeviceOrientationEvent.requestPermission === 'function') {
+            const permission = await window.DeviceOrientationEvent.requestPermission();
+            if (permission !== 'granted') {
+              setStatus('未获授权', 'error');
+              showMessage('未获得传感器权限。请在浏览器的网站设置中允许“运动与方向”访问，再点击重试。');
+              return;
+            }
+          }
+          if (thisSession !== session) return;
+          window.addEventListener('deviceorientation', onOrientation, { passive: true });
+          listening = true;
+          started = true;
+          sessionStartedAt = performance.now();
+          setStatus('等待数据', 'idle');
+          hint.textContent = '请轻轻转动手机 · 轻触任意轴放大';
+        } catch (error) {
+          setStatus('连接失败', 'error');
+          showMessage('无法启用传感器。请确认已允许运动与方向权限，并在系统浏览器中重新打开 HTTPS 页面。');
+        } finally {
+          start.disabled = false;
+          start.textContent = started ? '重新连接' : '重试连接';
+        }
+      }
+
+      // 不把最后一次数据一直当成实时数据。静止手机也可能不持续触发事件。
+      setInterval(() => {
+        if (!started || document.hidden) return;
+        const now = performance.now();
+        if (!hasSample && now - sessionStartedAt > 8000) {
+          setStatus('暂无数据', 'error');
+          showMessage('还没有收到传感器数据。请轻轻转动手机；若仍无数据，请检查运动与方向权限，或在手机系统浏览器中打开。');
+          sessionStartedAt = now + 60000;
+        } else if (hasSample && now - lastSampleAt > 4000) {
+          setStatus('等待更新', 'idle');
+          hint.textContent = '显示上次读数 · 转动手机可更新';
+        }
+      }, 1000);
+
+      function exitFocus(exitNative = true) {
+        if (!selected) return;
+        const previous = selected;
+        selected = null;
+        app.classList.remove('is-focused');
+        for (const tile of tiles) {
+          tile.classList.remove('is-selected');
+          tile.setAttribute('aria-expanded', 'false');
+        }
+        fullscreenWasEntered = false;
+        if (exitNative && document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        } else if (exitNative && document.webkitFullscreenElement && document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+        previous.focus({ preventScroll: true });
+      }
+      function focusAxis(tile) {
+        if (selected === tile) { exitFocus(); return; }
+        selected = tile;
+        for (const item of tiles) {
+          item.classList.toggle('is-selected', item === tile);
+          item.setAttribute('aria-expanded', String(item === tile));
+        }
+        app.classList.add('is-focused');
+        clearMessage();
+        back.focus({ preventScroll: true });
+        // 请求系统全屏；不支持时仍让单轴铺满整个网页视口。
+        try {
+          const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+          if (request && !document.fullscreenElement && !document.webkitFullscreenElement) {
+            const result = request.call(document.documentElement);
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+          }
+        } catch (error) { /* 视口全屏始终可用。 */ }
+      }
+      function onFullscreenChange() {
+        const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (active) {
+          // 全屏请求异步完成时，用户可能已经点击了返回。
+          if (!selected && document.exitFullscreen) { document.exitFullscreen().catch(() => {}); return; }
+          fullscreenWasEntered = true;
+        } else if (fullscreenWasEntered) exitFocus(false);
+      }
+      start.addEventListener('click', enableSensor);
+      tiles.forEach(tile => tile.addEventListener('click', () => focusAxis(tile)));
+      back.addEventListener('click', () => exitFocus());
+      document.getElementById('message-close').addEventListener('click', clearMessage);
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') exitFocus(); });
+      document.addEventListener('fullscreenchange', onFullscreenChange);
+      document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+      document.addEventListener('visibilitychange', () => {
+        if (!started) return;
+        if (document.hidden) {
+          setStatus('已暂停', 'idle');
+        } else {
+          setStatus('等待更新', 'idle');
+          hint.textContent = '请轻轻转动手机以更新数据';
+          sessionStartedAt = performance.now();
+        }
+      });
+      window.addEventListener('pagehide', () => {
+        if (listening) window.removeEventListener('deviceorientation', onOrientation);
+        listening = false;
+      });
+      window.addEventListener('pageshow', event => {
+        if (event.persisted && started && !listening) {
+          window.addEventListener('deviceorientation', onOrientation, { passive: true });
+          listening = true;
+          sessionStartedAt = performance.now();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

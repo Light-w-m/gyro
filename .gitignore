@@ -1,0 +1,23 @@
+# Local build output
+android/build/
+android/test-build/
+
+# APKs are delivered separately, or uploaded as GitHub Release assets.
+release/
+*.apk
+*.apk.idsig
+
+# Local signing files and credentials
+*.jks
+*.keystore
+key.properties
+local.properties
+.env
+.env.*
+
+# IDE and operating system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
