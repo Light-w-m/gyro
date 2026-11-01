@@ -6,29 +6,9 @@
 
 ## 直接安装
 
-本地交付文件夹的 `release/三轴角度-v1.0.apk` 是安装包，发送到安卓手机后打开安装。
+安装包发送到安卓手机后打开安装。
 
 详细操作见 [使用说明](docs/使用说明.md)。
-
-## 文件结构
-
-```text
-三轴角度项目/
-├── README.md                   项目入口
-├── .gitignore                  Git 忽略规则
-├── android/                    当前安卓应用源码
-│   ├── AndroidManifest.xml     应用配置与版本号
-│   ├── build.ps1               编译和签名脚本
-│   ├── src/                    Java 源码
-│   ├── res/                    黑色主题与图标
-│   └── tests/                  角度换算测试
-├── docs/
-│   ├── 使用说明.md
-│   ├── 构建说明.md
-│   └── 发布说明-v1.0.md
-├── release/                    本地安装包与校验值，不提交 Git
-└── legacy-web/                 早期网页版本，保留参考
-```
 
 ## 三轴含义
 
@@ -43,13 +23,5 @@
 ## 开发与检查
 
 无需 Gradle。构建需要 JDK、Android SDK Build Tools 35.0.0 和 Android API 35，操作见 [构建说明](docs/构建说明.md)。
-
-本次交付已通过编译、APK 签名验证，以及 10,270 组旋转矩阵换算测试；尚未进行真实手机的传感器和显示实测。
-
-## 以后上传 GitHub
-
-源码、资源、测试、脚本和文档提交到仓库即可。`release/` 中的 APK 不需要随源码提交；本项目的 `.gitignore` 已将安装包、编译中间文件和签名私钥排除。
-
-GitHub Release 是可选的版本发布功能。需要让别人方便下载 APK 时，再创建一个版本（例如 `v1.0`），将 APK 和校验文件作为附件上传。仅备份或分享代码时，可以不创建 Release。
 
 [GitHub Releases 说明](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)
