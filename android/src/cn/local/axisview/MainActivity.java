@@ -26,22 +26,43 @@ import android.view.WindowManager;
 public class MainActivity extends Activity implements SensorEventListener {
     private SensorManager sensors;
     private Sensor rotationSensor;
+    private Sensor gyroSensor;
+    private final OrientationTracker tracker = new OrientationTracker();
     private AxisView content;
     private int selected = -1;
     private boolean registered = false;
-    private boolean received = false;
-    private long lastTimestamp = 0;
-    private final float[] matrix = new float[9];
+    private boolean gyroFallbackTried;
+    private boolean rotationFallbackTried;
+    private boolean receivedGyro;
+    private boolean receivedRotation;
+    private long lastRotationArrival, lastGyroArrival, noticeUntil;
+    private int lastCalibrationState;
+    private String notice = "";
     private final double[] angles = {Double.NaN, Double.NaN, Double.NaN};
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable watchdog = new Runnable() {
         @Override public void run() {
             if (!registered) return;
-            if (SystemClock.elapsedRealtime() - lastTimestamp > 5000) {
-                content.status = received ? "等待更新" : "暂无数据 · 请转动手机";
-                content.invalidate();
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastRotationArrival > 2000 && !rotationFallbackTried) {
+                sensors.unregisterListener(MainActivity.this, rotationSensor);
+                registerRotation(false);
+                receivedRotation = false;
             }
-            handler.postDelayed(this, 1000);
+            if (gyroSensor != null && now - lastGyroArrival > 2000) {
+                sensors.unregisterListener(MainActivity.this, gyroSensor);
+                if (!gyroFallbackTried && registerGyroscope(false)) {
+                    tracker.restartGyroscope();
+                } else {
+                    gyroSensor = null;
+                    tracker.useRotationVectorOnly();
+                    receivedRotation = false;
+                }
+                lastGyroArrival = now;
+                receivedGyro = false;
+            }
+            refreshDisplay();
+            handler.postDelayed(this, 500);
         }
     };
 
@@ -57,9 +78,6 @@ public class MainActivity extends Activity implements SensorEventListener {
             getWindow().setAttributes(attrs);
         }
         sensors = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        // Fused gyro + gravity: relative yaw avoids compass interference.
-        rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
-        if (rotationSensor == null) rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         if (saved != null) selected = saved.getInt("selected", -1);
         content = new AxisView(this);
         setContentView(content);
@@ -69,15 +87,21 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     @Override protected void onResume() {
         super.onResume();
-        received = false;
+        registered = false;
+        receivedGyro = false;
+        receivedRotation = false;
+        noticeUntil = 0;
+        lastCalibrationState = OrientationTracker.CALIBRATION_IDLE;
         for (int i = 0; i < 3; i++) angles[i] = Double.NaN;
-        if (rotationSensor == null) {
+        if (!registerRotation(true)) {
             content.status = "未检测到姿态传感器";
         } else {
-            registered = sensors.registerListener(this, rotationSensor, 20000); // 50 Hz.
-            content.status = registered ? "等待传感器" : "传感器连接失败";
-            lastTimestamp = SystemClock.elapsedRealtime();
-            if (registered) handler.postDelayed(watchdog, 1000);
+            registerGyroscope(true);
+            tracker.reset(gyroSensor != null);
+            registered = true;
+            content.status = "等待传感器";
+            lastRotationArrival = lastGyroArrival = SystemClock.elapsedRealtime();
+            handler.postDelayed(watchdog, 500);
         }
         content.invalidate();
         hideSystemBars();
@@ -92,15 +116,90 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     @Override public void onSensorChanged(SensorEvent event) {
         if (!registered) return;
-        SensorManager.getRotationMatrixFromVector(matrix, event.values);
-        AngleMath.fromMatrix(matrix, angles);
-        received = true;
-        lastTimestamp = SystemClock.elapsedRealtime();
-        content.status = "实时读取";
-        content.postInvalidateOnAnimation();
+        if (event.sensor == rotationSensor) {
+            if (!tracker.updateRotationVector(event.values, event.timestamp)) return;
+            lastRotationArrival = SystemClock.elapsedRealtime();
+            receivedRotation = true;
+        } else if (event.sensor == gyroSensor) {
+            if (!tracker.updateGyroscope(event.values, event.timestamp,
+                    gyroSensor.getType() == Sensor.TYPE_GYROSCOPE_UNCALIBRATED)) return;
+            lastGyroArrival = SystemClock.elapsedRealtime();
+            receivedGyro = true;
+        } else return;
+        refreshDisplay();
     }
 
     @Override public void onAccuracyChanged(Sensor sensor, int accuracy) { }
+
+    private boolean registerRotation(boolean preferGame) {
+        rotationFallbackTried = !preferGame;
+        rotationSensor = preferGame ? sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) : null;
+        if (registerSensor(rotationSensor)) return true;
+        rotationFallbackTried = true;
+        rotationSensor = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        if (registerSensor(rotationSensor)) return true;
+        rotationSensor = null;
+        return false;
+    }
+
+    private boolean registerGyroscope(boolean preferUncalibrated) {
+        gyroFallbackTried = !preferUncalibrated;
+        gyroSensor = preferUncalibrated ? sensors.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED) : null;
+        if (registerSensor(gyroSensor)) return true;
+        gyroFallbackTried = true;
+        gyroSensor = sensors.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+        if (registerSensor(gyroSensor)) return true;
+        gyroSensor = null;
+        return false;
+    }
+
+    private boolean registerSensor(Sensor sensor) {
+        if (sensor == null) return false;
+        try {
+            // 100 Hz, no batching; below Android 12's 200 Hz permission limit.
+            return sensors.registerListener(this, sensor, 10000, 0);
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    private void refreshDisplay() {
+        long now = SystemClock.elapsedRealtime();
+        int calibration = tracker.calibrationState();
+        if (calibration != lastCalibrationState) {
+            lastCalibrationState = calibration;
+            if (calibration == OrientationTracker.CALIBRATION_DONE) {
+                notice = "校准完成 · Z 已归零"; noticeUntil = now + 3000;
+            } else if (calibration == OrientationTracker.CALIBRATION_MOVED) {
+                notice = "校准取消 · 请静置后长按"; noticeUntil = now + 3000;
+            }
+        }
+        boolean stale = now - (gyroSensor != null ? lastGyroArrival : lastRotationArrival) > 2000;
+        boolean waiting = gyroSensor != null ? !receivedGyro : !receivedRotation;
+        if (!tracker.isReady() || stale || waiting) {
+            for (int i = 0; i < 3; i++) angles[i] = Double.NaN;
+            content.status = stale ? "传感器数据中断" : tracker.isReady() && gyroSensor != null ? "等待陀螺仪" : "等待姿态数据";
+        } else {
+            tracker.readAngles(angles);
+            if (calibration == OrientationTracker.CALIBRATING) {
+                angles[2] = Double.NaN;
+                content.status = "请静置 · 校准 2 秒";
+            } else if (now < noticeUntil) content.status = notice;
+            else if (gyroSensor != null && now - lastRotationArrival > 2000) content.status = "姿态校正中断";
+            else if (gyroSensor != null) content.status = gyroSensor.getType() == Sensor.TYPE_GYROSCOPE_UNCALIBRATED
+                ? "慢转优化" : "标准陀螺仪";
+            else content.status = "兼容姿态模式";
+        }
+        content.postInvalidateOnAnimation();
+    }
+
+    private void calibrate() {
+        if (SystemClock.elapsedRealtime() - lastGyroArrival > 1000 || !tracker.startCalibration()) {
+            notice = "当前无可用陀螺仪";
+            noticeUntil = SystemClock.elapsedRealtime() + 3000;
+        }
+        refreshDisplay();
+    }
 
     private void updateOrientation() {
         setRequestedOrientation(selected < 0
@@ -203,7 +302,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                         c.drawLine(left + pad, panelTop + panelHeight, left + width - pad, panelTop + panelHeight, paint);
                     }
                 }
-                text(c, "轻触任意轴 · 横屏放大", left + width / 2, top + height - dp(9), dp(10), 0xff777777, Paint.Align.CENTER, regular);
+                text(c, "轻触任意轴放大 · 长按静置校准", left + width / 2, top + height - dp(9), dp(10), 0xff777777, Paint.Align.CENTER, regular);
             } else {
                 text(c, "‹  返回三轴", left + pad, top + dp(33), dp(13), 0xffcccccc, Paint.Align.LEFT, regular);
                 text(c, status, left + width - pad, top + dp(33), dp(11), 0xff999999, Paint.Align.RIGHT, regular);
@@ -235,7 +334,8 @@ public class MainActivity extends Activity implements SensorEventListener {
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                 float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
-                if (Math.hypot(event.getX() - downX, event.getY() - downY) > slop || event.getEventTime() - downAt > 700) return true;
+                if (Math.hypot(event.getX() - downX, event.getY() - downY) > slop) return true;
+                if (event.getEventTime() - downAt > 700) { performClick(); calibrate(); return true; }
                 if (selected >= 0) { performClick(); showOverview(); return true; }
                 float gridTop = insetTop + dp(52);
                 float gridHeight = getHeight() - insetTop - insetBottom - dp(78);
